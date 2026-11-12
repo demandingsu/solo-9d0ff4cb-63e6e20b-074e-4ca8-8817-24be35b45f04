@@ -54,6 +54,13 @@ class MonthlyBillOut(BaseModel):
     monthly_total_cny: float
 
 
+class PlanSourceOut(BaseModel):
+    """一份套餐详情的来源：详情地址与发现它的列表页。"""
+
+    detail_url: str
+    list_url: str
+
+
 class RankedPlanOut(BaseModel):
     rank: int
     plan_id: str
@@ -63,6 +70,7 @@ class RankedPlanOut(BaseModel):
     annual_total_cny: float
     detail_url: str
     list_url: str
+    sources: list[PlanSourceOut]
     monthly_bills: list[MonthlyBillOut]
 
 
@@ -75,6 +83,24 @@ class ExcludedPlanOut(BaseModel):
     detail: str
     detail_url: str
     list_url: str
+    sources: list[PlanSourceOut]
+
+
+class MergedDuplicatePlanOut(BaseModel):
+    """同编号且内容一致、已归并为一处的套餐。"""
+
+    plan_id: str
+    plan_name: str
+    sources: list[PlanSourceOut]
+
+
+class ConflictingPlanOut(BaseModel):
+    """同编号但内容冲突、整组被排除的套餐。"""
+
+    plan_id: str
+    plan_name: str
+    conflict_fields: list[str]
+    sources: list[PlanSourceOut]
 
 
 class CrawlFailureOut(BaseModel):
@@ -91,4 +117,6 @@ class CompareResponse(BaseModel):
     conclusion: dict
     ranked_plans: list[RankedPlanOut]
     excluded_plans: list[ExcludedPlanOut]
+    merged_duplicate_plans: list[MergedDuplicatePlanOut]
+    conflicting_plans: list[ConflictingPlanOut]
     failures: list[CrawlFailureOut]

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公开电价套餐报价站 - 重复与冲突样例 · 套餐列表 第1页</title>
+<link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+<header>
+  <h1>公开电价套餐报价站 · 重复与冲突样例</h1>
+  <p>演示用本地样例站 · 同一套餐编号跨页指向不同详情（数据均为虚构示例）</p>
+</header>
+<main data-page="plan-list" data-page-no="1">
+  <h2>套餐列表（第 1 页）</h2>
+
+  <article class="plan-card" data-plan-id="P001">
+    <h3><a class="plan-link" href="../../plans/p001.html">华东安心电 · 峰谷套餐 A</a></h3>
+    <div class="plan-meta">
+      <span class="tag tag-region" data-region="上海">上海</span>
+      <span class="tag tag-region" data-region="江苏">江苏</span>
+      <span class="tag tag-region" data-region="浙江">浙江</span>
+      <span class="tag tag-region" data-region="华东">华东</span>
+      <span class="tag">供应商：安能电力</span>
+      <span class="tag">月基本费：<span data-base-fee-cny="60.00">¥60.00</span></span>
+    </div>
+    <p class="plan-summary">有效套餐；第 2 页以同编号指向内容一致的镜像详情，应只计一次。</p>
+  </article>
+
+  <article class="plan-card" data-plan-id="P002">
+    <h3><a class="plan-link" href="../../plans/p002.html">华东安心电 · 峰谷套餐 B</a></h3>
+    <div class="plan-meta">
+      <span class="tag tag-region" data-region="上海">上海</span>
+      <span class="tag tag-region" data-region="华东">华东</span>
+      <span class="tag">供应商：安能电力</span>
+      <span class="tag">月基本费：<span data-base-fee-cny="45.00">¥45.00</span></span>
+    </div>
+    <p class="plan-summary">有效套餐，用于确认归并后其他套餐仍照常计费排序。</p>
+  </article>
+
+  <article class="plan-card" data-plan-id="P003">
+    <h3><a class="plan-link" href="../../plans/p003.html">沪电零售 · 峰谷阶梯标准版</a></h3>
+    <div class="plan-meta">
+      <span class="tag tag-region" data-region="上海">上海</span>
+      <span class="tag">供应商：沪电零售</span>
+      <span class="tag">月基本费：<span data-base-fee-cny="80.00">¥80.00</span></span>
+    </div>
+    <p class="plan-summary">第 2 页以同编号指向另一版本（月基本费与费率不同），整组应不参与比价。</p>
+  </article>
+
+  <nav class="pagination" data-pagination>
+    <span>第 1 页 / 共 2 页</span>
+    <a rel="next" href="index-2.html">下一页 &raquo;</a>
+  </nav>
+</main>
+</body>
+</html>

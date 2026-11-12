@@ -12,20 +12,29 @@
 ```
 .
 ├── app/
-│   ├── main.py        # FastAPI 路由与比较编排
+│   ├── main.py        # FastAPI 路由（薄封装）
+│   ├── comparison.py  # 抓取 -> 归并 -> 筛选 -> 计费 -> 排序（纯函数，可离线调用）
+│   ├── grouping.py    # 跨页同编号归并与内容冲突判定
 │   ├── schemas.py     # 请求/响应 Pydantic 模型
 │   ├── scraper.py     # 分页列表 + 套餐详情抓取解析
 │   ├── fetcher.py     # http/https/file 统一抓取层与错误归一化
 │   ├── html_dom.py    # 标准库实现的轻量 HTML DOM
 │   └── billing.py     # 峰谷逐档计费、资格校验、年度汇总
 ├── quote-site/        # 本地报价站（静态 HTML，虚构演示数据）
-│   ├── index.html         # 列表第 1 页（P001-P004，含 next 分页链接）
-│   ├── index-2.html       # 列表第 2 页（P005-P007）
+│   ├── index.html         # 主站列表第 1 页（P001-P004，含 next 分页链接）
+│   ├── index-2.html       # 主站列表第 2 页（P005-P007）
 │   ├── plans/p001..p006.html
 │   ├── 404.html           # p007.html 故意缺失，演示详情抓取失败
+│   ├── samples/duplicate-conflict/   # 重复 / 冲突样例站
+│   │   ├── index.html         # 第 1 页：P001、P002、P003
+│   │   ├── index-2.html       # 第 2 页：P001 镜像详情、P003 另一版本
+│   │   └── plans/
+│   │       ├── p001.html      # 与主站 P001 内容完全一致 -> 归并只计一次
+│   │       └── p003-alt.html  # 与主站 P003 同编号但金额/费率不同 -> 整组排除
 │   └── nginx.conf
-├── tests/             # 标准库 unittest 离线测试（9 个用例）
+├── tests/             # 标准库 unittest 离线测试
 ├── demo/request.json  # 示例请求（12 个月峰谷用电）
+├── demo/request-duplicate-conflict.json  # 样例站请求
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -46,6 +55,11 @@ docker compose up --build
 curl -X POST http://localhost:8000/api/v1/compare-plans \
   -H "Content-Type: application/json" \
   --data @demo/request.json
+
+# 重复 / 冲突样例站
+curl -X POST http://localhost:8000/api/v1/compare-plans \
+  -H "Content-Type: application/json" \
+  --data @demo/request-duplicate-conflict.json
 ```
 
 ## 无 Docker 的离线运行
@@ -54,6 +68,20 @@ curl -X POST http://localhost:8000/api/v1/compare-plans \
 
 ```bash
 python3 -I -m unittest discover -s tests -t . -v
+```
+
+也可以用标准库直接跑完整比较链路（无需安装 FastAPI）：
+
+```bash
+python3 -c "
+from app.comparison import run_comparison
+import json
+usage = [{'month': i['month'], 'peak_kwh': i['peak_kwh'], 'valley_kwh': i['valley_kwh']}
+         for i in json.load(open('demo/request-duplicate-conflict.json'))['monthly_usage']]
+print(json.dumps(run_comparison(
+    'file:///workspace/quote-site/samples/duplicate-conflict/index.html', '上海', usage),
+    ensure_ascii=False, indent=2))
+"
 ```
 
 手动启动报价站与 API（需自行安装 `requirements.txt`）：
@@ -79,6 +107,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## 计费与筛选规则
 
+0. **跨页套餐归并（先于筛选）**：按套餐编号 `plan_id` 把不同列表页发现的详情归组。
+   - 同编号详情的**名称、供应商、适用地区、月基本费、峰段档位、谷段档位**全部一致
+     → 视为同一套餐，只计一次（取首次发现的详情为代表），全部来源记录在
+     `merged_duplicate_plans[].sources`，参与排序的套餐在 `sources` 中给出全部详情来源。
+     比较时忽略文本首尾空白/大小写差异、地区标签顺序差异与费率表行序差异。
+   - 同编号但上述任一字段不一致 → 内容冲突，**整组不参与比价**：
+     在 `excluded_plans` 中以 `conflicting_details` 排除并列出每一份详情的
+     `detail_url` + 所在 `list_url`，同时在 `conflicting_plans` 中给出冲突字段与全部来源；
+     最低价结论强制标记为 `pending_verification`（待核实）。
 1. **地区过滤**：套餐适用地区不包含请求地区 → 排除（`region_not_applicable`）。
 2. **费率完整性**：缺峰段或谷段费率表、费率档位无法解析、月基本费缺失 → 排除
    （`missing_rates` / `invalid_tier_structure` / `missing_base_fee`）。
@@ -92,8 +129,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 - 列表页（含分页）或套餐详情抓取失败（连接错误、超时、HTTP 4xx/5xx、结构无法解析）时，
   在响应 `failures` 中列出失败地址、阶段（`list`/`detail`）、原因与 HTTP 状态码。
-- 只要存在任何抓取失败，`conclusion.verification_status` 标记为 `pending_verification`（待核实）；
-  全部成功且存在有效套餐时为 `verified`。无有效套餐时同样为 `pending_verification`。
+- 只要存在任何抓取失败，或存在任何内容冲突的同编号套餐详情，
+  `conclusion.verification_status` 标记为 `pending_verification`（待核实）；
+  全部成功、无内容冲突且存在有效套餐时为 `verified`。无有效套餐时同样为 `pending_verification`。
+- `crawl` 汇总同时给出 `plans_crawled`（抓取到的详情份数）、`distinct_plan_ids`
+  （归并后的编号数）、`merged_duplicate_count`（归并掉的重复份数）与
+  `conflicting_group_count`（冲突组数），便于核对归并结果。
 - 分页跟随 `a[rel=next]`，并设有 50 页安全上限与去重，避免异常站点造成无限抓取。
 
 ## 演示数据覆盖的场景
@@ -110,6 +151,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 示例请求下的复核年度成本（元）：**P003 6899.40 < P001 7247.40 < P002 7842.00**。
 
+### 重复 / 冲突样例站（`quote-site/samples/duplicate-conflict/`）
+
+模拟“不同列表页把同一套餐编号指向两份不同详情”：
+
+| 编号 | 第 1 页详情 | 第 2 页详情 | 归并结果 |
+| --- | --- | --- | --- |
+| P001 | `plans/p001.html` | `samples/duplicate-conflict/plans/p001.html`（内容完全一致） | 归并为一处，只计一次，年度 7247.40，`sources` 列出两份来源 |
+| P002 | `plans/p002.html` | — | 正常参与排序，年度 7842.00 |
+| P003 | `plans/p003.html`（月基本费 80、峰 1.00/1.15/1.28、谷 0.35/0.45/0.58） | `samples/duplicate-conflict/plans/p003-alt.html`（月基本费 70、峰 0.98/1.12/1.25、谷 0.34/0.44/0.56） | 内容冲突，**整组不参与比价**，`excluded_plans` 列出两份详情来源；最低价标为待核实 |
+
+样例请求 `demo/request-duplicate-conflict.json` 的响应要点：P001 与 P002 仍返回
+年度费用与排序（1、2），P003 被排除且 `conclusion.conflicting_plan_ids = ["P003"]`，
+`verification_status = "pending_verification"`。
+
 ## 响应结构（摘要）
 
 ```json
@@ -119,14 +174,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
     "lowest_plan_name": "沪电零售 · 峰谷阶梯标准版",
     "lowest_annual_total_cny": 6899.4,
     "verification_status": "pending_verification",
-    "note": "存在抓取失败的列表页或套餐详情，最低价结论待核实"
+    "note": "存在抓取失败的列表页或套餐详情，最低价结论待核实",
+    "conflicting_plan_ids": []
   },
+  "crawl": { "plans_crawled": 6, "distinct_plan_ids": 6,
+             "merged_duplicate_count": 0, "conflicting_group_count": 0,
+             "eligible_count": 3, "excluded_count": 3, "failure_count": 1 },
   "ranked_plans": [ { "rank": 1, "annual_total_cny": 6899.4,
+                      "sources": [ { "detail_url": "...", "list_url": "..." } ],
                       "monthly_bills": [ { "peak_charges": [...], "valley_charges": [...] } ] } ],
-  "excluded_plans": [ { "plan_id": "P006", "reason": "usage_exceeds_published_tiers", "detail": "..." } ],
+  "excluded_plans": [ { "plan_id": "P006", "reason": "usage_exceeds_published_tiers",
+                        "detail": "...", "sources": [ { "detail_url": "...", "list_url": "..." } ] } ],
+  "merged_duplicate_plans": [ { "plan_id": "P001", "plan_name": "...", "sources": [ ... , ... ] } ],
+  "conflicting_plans": [ { "plan_id": "P003", "conflict_fields": ["base_fee_cny"],
+                           "sources": [ { "detail_url": "a.html", "list_url": "第1页" },
+                                        { "detail_url": "b.html", "list_url": "第2页" } ] } ],
   "failures": [ { "url": ".../p007.html", "stage": "detail", "reason": "HTTP 404", "status": 404 } ]
 }
 ```
 
-每个参与排序的套餐均带 `detail_url`（详情来源）与 `list_url`（发现该套餐的列表页），
-月度账单逐档列出 charged_kwh 与 charge_cny，便于采购员复核。
+每个参与排序的套餐均带 `detail_url`（代表详情来源）与 `list_url`（首次发现该套餐的列表页），
+`sources` 列出该套餐编号去重后的全部详情来源；冲突组在 `excluded_plans` 与
+`conflicting_plans` 中均逐份列出详情来源。月度账单逐档列出 charged_kwh 与 charge_cny，便于采购员复核。
